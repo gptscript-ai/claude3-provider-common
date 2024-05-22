@@ -1,1 +1,1 @@
-from . import main
+from .main import list_models, completions
