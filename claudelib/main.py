@@ -1,10 +1,11 @@
 import json
 import os
-import re
 
-import xmltodict
 from anthropic import AsyncAnthropic, AsyncAnthropicBedrock
+from anthropic._types import NOT_GIVEN
 from fastapi.responses import JSONResponse, StreamingResponse
+from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
 
 debug = os.environ.get("GPTSCRIPT_DEBUG", "false") == "true"
 
@@ -26,26 +27,27 @@ async def list_models(client: AsyncAnthropic | AsyncAnthropicBedrock) -> JSONRes
     return JSONResponse(content={"data": data})
 
 
-def map_req(req: dict) -> dict:
-    system: str | None = ""
+def map_tools(tools: list[dict]) -> list[dict]:
+    anthropic_tools: list[dict] = []
+    for tool in tools:
+        anthropic_tool = {
+            "name": tool["function"]["name"],
+            "description": tool["function"]["description"],
+            "input_schema": tool["function"]["parameters"],
+        }
+        anthropic_tools.append(anthropic_tool)
+    return anthropic_tools
+
+
+def map_messages(messages: dict) -> tuple[str, list[dict]]:
+    system: str = ""
     mapped_messages: list[dict] = []
 
-    max_tokens = 4096
-    if 'max_tokens' in req.keys():
-        max_tokens = req["max_tokens"]
-
-    if "tools" in req.keys():
-        system += construct_tool_use_system_prompt(req["tools"])
-
-    messages = req["messages"]
-
-    tool_inputs_xml: list[str] = []
-    tool_outputs_xml: list[str] = []
     for message in messages:
-        if 'role' in message.keys() and message["role"] == "system":
+        if 'role' in message.keys() and (message["role"] in ["system"]):
             system += message["content"] + "\n"
 
-        if 'role' in message.keys() and message["role"] == "user":
+        if 'role' in message.keys() and message["role"] in "user":
             mapped_messages.append({
                 "role": "user",
                 "content": [
@@ -57,45 +59,41 @@ def map_req(req: dict) -> dict:
             })
 
         if 'role' in message.keys() and message["role"] == "tool":
-            content: str = '\n' + construct_tool_outputs_message([message], None)
             mapped_messages.append({
                 "role": "user",
-                "content": content,
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": message["tool_call_id"],
+                        "content": message["content"],
+                    }
+                ]
             })
 
         if 'role' in message.keys() and message["role"] == "assistant":
             if 'tool_calls' in message.keys():
-                tool_inputs = []
+                tool_calls = []
                 for tool_call in message["tool_calls"]:
-                    tool_inputs.append({
-                        "tool_name": tool_call["function"]["name"],
-                        "tool_arguments": tool_call["function"]["arguments"],
+                    tool_calls.append({
+                        "type": "tool_use",
+                        "id": tool_call["id"],
+                        "name": tool_call["function"]["name"],
+                        "input": json.loads(tool_call["function"]["arguments"]),
                     })
-                content: str = '\n' + construct_tool_inputs_message(message.get("content", ""), tool_inputs)
                 mapped_messages.append({
                     "role": "assistant",
-                    "content": content,
+                    "content": tool_calls,
                 })
-            else:
+            elif 'content' in message.keys() and message["content"] is not None:
                 mapped_messages.append({
                     "role": "assistant",
-                    "content": message["content"]
+                    "content": message["content"],
                 })
-
-    for message in mapped_messages:
-        if 'role' in message.keys() and message["role"] == "":
-            message["role"] = "assistant"
-
+    log("PRE MESSAGE MERGE: ", mapped_messages)
     mapped_messages = merge_consecutive_dicts_with_same_value(mapped_messages, "role")
-
-    mapped_req = {
-        "messages": mapped_messages,
-        "max_tokens": max_tokens,
-        "system": system,
-        "model": req["model"],
-        "temperature": req["temperature"],
-    }
-    return mapped_req
+    log("SYSTEM: ", system)
+    log("MAPPED MESSAGES: ", mapped_messages)
+    return system, mapped_messages
 
 
 def merge_consecutive_dicts_with_same_value(list_of_dicts, key) -> list[dict]:
@@ -106,6 +104,8 @@ def merge_consecutive_dicts_with_same_value(list_of_dicts, key) -> list[dict]:
         value_to_match = current_dict.get(key)
         compared_index = index + 1
         while compared_index < len(list_of_dicts) and list_of_dicts[compared_index].get(key) == value_to_match:
+            log("CURRENT DICT: ", current_dict)
+            log("COMPARED DICT: ", list_of_dicts[compared_index])
             list_of_dicts[compared_index]["content"] = current_dict["content"] + (list_of_dicts[compared_index][
                 "content"])
             current_dict.update(list_of_dicts[compared_index])
@@ -115,210 +115,116 @@ def merge_consecutive_dicts_with_same_value(list_of_dicts, key) -> list[dict]:
     return merged_list
 
 
-def map_resp(response) -> str:
-    data = json.loads(response)
-    finish_reason = None
+async def completions(client: AsyncAnthropic | AsyncAnthropicBedrock, input: dict):
+    log("ORIGINAL REQUEST: ", input)
+    tools = input.get("tools", NOT_GIVEN)
+    if tools is not NOT_GIVEN:
+        tools = map_tools(tools)
+        log("MAPPED TOOLS: ", tools)
+
+    if input["model"].startswith("anthropic."):
+        log('using bedrock client')
+        client = AsyncAnthropicBedrock()
+    else:
+        client = AsyncAnthropic()
+
+    system, messages = map_messages(input["messages"])
+
+    max_tokens = input.get("max_tokens", 1024)
+    if max_tokens is not None:
+        max_tokens = int(max_tokens)
+
+    temperature = input.get("temperature", NOT_GIVEN)
+    if temperature is not None:
+        temperature = float(temperature)
+
+    stream = input.get("stream", False)
+
+    top_k = input.get("top_k", NOT_GIVEN)
+    if top_k is not NOT_GIVEN:
+        top_k = int(top_k)
+
+    top_p = input.get("top_p", NOT_GIVEN)
+    if top_p is not NOT_GIVEN:
+        top_p = float(top_p)
+
+    try:
+        response = await client.beta.tools.messages.create(
+            max_tokens=max_tokens,
+            system=system,
+            messages=messages,
+            model=input["model"],
+            temperature=temperature,
+            tools=tools,
+            top_k=top_k,
+            top_p=top_p,
+        )
+    except Exception as e:
+        return JSONResponse(content={"error": str(e)}, status_code=e.__dict__["status_code"])
+
+    log("RESPONSE FROM CLAUDE")
+    log(response.model_dump_json())
+
+    mapped_response = map_resp(response)
+
+    log("MAPPED RESPONSE")
+    log(mapped_response.model_dump_json())
+
+    return StreamingResponse("data: " + mapped_response.model_dump_json() + "\n\n", media_type="application/x-ndjson")
+
+
+def map_resp(response):
     parsed_tool_calls = []
+    content: str | None = None
 
-    log("INITIAL RESPONSE DATA: ", data)
-
-    for message in data["content"]:
-        if 'text' in message.keys() and "<function_calls>" in message["text"]:
-            pattern = re.compile(r'(<function_calls>.*?</invoke>)', re.DOTALL)
-            match = pattern.search(message["text"])
-            xml_tool_calls = match.group(1) + "</function_calls>"
-            tool_calls = xmltodict.parse(xml_tool_calls)
-            if tool_calls["function_calls"]["invoke"] is list:
-                for key, value in tool_calls["function_calls"]["invoke"].items():
-                    parsed_tool_calls.append({
-                        "index": 0,
-                        "id": value['tool_name'],
-                        "type": "function",
-                        "function": {
-                            "name": value["tool_name"],
-                            "arguments": str(value["parameters"]),
-                        },
-                    })
-            else:
+    for item in response.content:
+        if response.stop_reason == "tool_use":
+            if item.type == "tool_use":
+                index = len(parsed_tool_calls)
                 parsed_tool_calls.append({
-                    "index": 0,
-                    "id": tool_calls["function_calls"]["invoke"]["tool_name"],
+                    "index": index,
+                    "id": item.id,
                     "type": "function",
                     "function": {
-                        "name": tool_calls["function_calls"]["invoke"]["tool_name"],
-                        "arguments": json.dumps(tool_calls["function_calls"]["invoke"]["parameters"]),
-                    },
+                        "name": item.name,
+                        "arguments": json.dumps(item.input),
+                    }
                 })
+                content = None
+        else:
+            if item.type == "text":
+                content = item.text
 
-            message.pop("text", None)
-            message.pop("type", None)
-            message["tool_calls"] = parsed_tool_calls
-            message["content"] = None
-            message["role"] = "assistant"
+    role = response.role
+    finish_reason = map_finish_reason(response.stop_reason)
 
-        if 'text' in message.keys():
-            message["content"] = message["text"]
-            message.pop("text", None)
-            message.pop("type", None)
-
-    if "stop_reason" in data.keys() and data["stop_reason"] == "stop_sequence":
-        finish_reason = "tool_calls"
-
-    if "stop_reason" in data.keys() and data["stop_reason"] == "end_turn":
-        finish_reason = "stop"
-
-    log("MAPPED RESPONSE DATA: ", data)
-
-    try:
-        delta = data["content"][0]
-    except:
-        delta = []
-
-    translated = {
-        "id": data["id"],
-        "object": "chat.completion.chunk",
-        "created": 0,
-        "model": data["model"],
-        "system_fingerprint": "TEMP",
-        "choices": [
-            {
-                "index": 0,
-                "delta": delta,
-                "finish_reason": finish_reason,
-            },
+    resp = ChatCompletionChunk(
+        id="0",
+        choices=[
+            Choice(
+                delta=ChoiceDelta(
+                    content=content,
+                    tool_calls=parsed_tool_calls,
+                    role=role
+                ),
+                finish_reason=finish_reason,
+                index=0,
+            )
         ],
-    }
-
-    return json.dumps(translated)
-
-
-async def completions(client: AsyncAnthropic | AsyncAnthropicBedrock, input: dict) -> StreamingResponse:
-    log("ORIGINAL REQUEST: ", input)
-    req = map_req(input)
-    log("MAPPED REQUEST: ", req)
-
-    try:
-        async with client.messages.stream(
-                max_tokens=req["max_tokens"],
-                system=req["system"],
-                messages=req["messages"],
-                model=req["model"],
-                temperature=req["temperature"],
-                stop_sequences=["</function_calls>"],
-        ) as stream:
-            accumulated = await stream.get_final_message()
-
-    except Exception as e:
-        try:
-            error_code = e.__dict__["status_code"]
-        except:
-            error_code = 500
-
-        error_message = {"error from remote": str(e)}
-        return StreamingResponse(json.dumps(error_message), media_type="application/x-ndjson", status_code=error_code)
-
-    resp = "data: " + map_resp(accumulated.json()) + "\n\n"
-    return StreamingResponse(resp, media_type="application/x-ndjson")
-
-
-# This file contains prompt constructors for various pieces of code. Used primarily to keep other code legible.
-def construct_tool_use_system_prompt(tools):
-    tool_use_system_prompt = (
-            "In this environment you have access to a set of tools you can use to answer the user's question.\n"
-            "\n"
-            "You may call them like this:\n"
-            "<function_calls>\n"
-            "<invoke>\n"
-            "<tool_name>$TOOL_NAME</tool_name>\n"
-            "<parameters>\n"
-            "<$PARAMETER_NAME>$PARAMETER_VALUE</$PARAMETER_NAME>\n"
-            "...\n"
-            "</parameters>\n"
-            "</invoke>\n"
-            "</function_calls>\n"
-            "\n"
-            "Here are the tools available:\n"
-            "<tools>\n"
-            + '\n'.join(
-        [construct_format_tool_for_claude_prompt(tool["function"]["name"], tool["function"]["description"],
-                                                 tool["function"]["parameters"]["properties"]) for tool in
-         tools]) +
-            "\n</tools>"
+        created=0,
+        model="",
+        object="chat.completion.chunk",
     )
-
-    return tool_use_system_prompt
-
-
-def construct_successful_function_run_injection_prompt(invoke_results_results) -> str:
-    constructed_prompt = (
-            "<function_results>\n"
-            + '\n'.join(
-        f"<result>\n<tool_name>{res['tool_call_id']}</tool_name>\n<stdout>\n{res['content']}\n</stdout>\n</result>" for
-        res in invoke_results_results) +
-            "\n</function_results>"
-    )
-
-    return constructed_prompt
+    return resp
 
 
-def construct_error_function_run_injection_prompt(invoke_results_error_message) -> str:
-    constructed_prompt = (
-        "<function_results>\n"
-        "<system>\n"
-        f"{invoke_results_error_message}"
-        "\n</system>"
-        "\n</function_results>"
-    )
-
-    return constructed_prompt
-
-
-def construct_format_parameters_prompt(parameters) -> str:
-    constructed_prompt = "\n".join(
-        f"<parameter>\n<name>{key}</name>\n<type>{value['type']}</type>\n<description>{value['description']}</description>\n</parameter>"
-        for key, value in parameters.items())
-
-    return constructed_prompt
-
-
-def construct_format_tool_for_claude_prompt(name, description, parameters) -> str:
-    constructed_prompt = (
-        "<tool_description>\n"
-        f"<tool_name>{name}</tool_name>\n"
-        "<description>\n"
-        f"{description}\n"
-        "</description>\n"
-        "<parameters>\n"
-        f"{construct_format_parameters_prompt(parameters)}\n"
-        "</parameters>\n"
-        "</tool_description>"
-    )
-
-    return constructed_prompt
-
-
-def construct_tool_inputs_message(content, tool_inputs) -> str:
-    def format_parameters(tool_arguments):
-        return '\n'.join([f'<{key}>{value}</{key}>' for key, value in json.loads(tool_arguments).items()])
-
-    single_call_messages = "\n\n".join([
-        f"<invoke>\n<tool_name>{tool_input['tool_name']}</tool_name>\n<parameters>\n{format_parameters(tool_input['tool_arguments'])}\n</parameters>\n</invoke>"
-        for tool_input in tool_inputs])
-    message = (
-        f"{content}"
-        "\n\n<function_calls>\n"
-        f"{single_call_messages}\n"
-        "</function_calls>"
-    )
-    return message
-
-
-def construct_tool_outputs_message(tool_outputs, tool_error) -> str:
-    if tool_error is not None:
-        message = construct_error_function_run_injection_prompt(tool_error)
-        return f"\n\n{message}"
-    elif tool_outputs is not None:
-        message = construct_successful_function_run_injection_prompt(tool_outputs)
-        return f"\n\n{message}"
-    else:
-        raise ValueError("At least one of tool_result or tool_error must not be None.")
+def map_finish_reason(finish_reason: str) -> str:
+    if (finish_reason == "end_turn"):
+        return "stop"
+    elif (finish_reason == "stop_sequence"):
+        return "stop"
+    elif finish_reason == "max_tokens":
+        return "length"
+    elif finish_reason == "tool_use":
+        return "tool_calls"
+    return finish_reason

@@ -1,6 +1,4 @@
-hatch
 anthropic[bedrock]
 anthropic
-xmltodict
 openai
 fastapi
