@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "claudelib"
+name = "claude3_provider_common"
 version = "0.0.1"
 authors = [
     { name = "Taylor Price" },
@@ -17,8 +17,6 @@ classifiers = [
 ]
 dependencies = [
     "anthropic",
-    "xmltodict",
-    "boto3",
     "openai",
     "fastapi",
 ]
