@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "claude3_provider_common"
+name = "claude3-provider-common"
 version = "0.0.1"
 authors = [
     { name = "Taylor Price" },
@@ -23,5 +23,5 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/gptscript-ai/claude3_provider_common"
-Issues = "https://github.com/gptscript-ai/claude3_provider_common/issues"
+Homepage = "https://github.com/gptscript-ai/claude3-provider-common"
+Issues = "https://github.com/gptscript-ai/claude3-provider-common/issues"
