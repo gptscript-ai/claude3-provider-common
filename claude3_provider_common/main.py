@@ -69,7 +69,7 @@ def map_req(req: dict) -> dict:
                 for tool_call in message["tool_calls"]:
                     tool_inputs.append({
                         "tool_name": tool_call["function"]["name"],
-                        "tool_arguments": tool_call["function"]["arguments"],
+                        "tool_arguments": tool_call["function"].get("arguments", None),
                     })
                 content: str = '\n' + construct_tool_inputs_message(message.get("content", ""), tool_inputs)
                 mapped_messages.append({
@@ -240,8 +240,9 @@ def construct_tool_use_system_prompt(tools):
             "Here are the tools available:\n"
             "<tools>\n"
             + '\n'.join(
-        [construct_format_tool_for_claude_prompt(tool["function"]["name"], tool["function"]["description"],
-                                                 tool["function"]["parameters"]["properties"]) for tool in
+        [construct_format_tool_for_claude_prompt(tool["function"]["name"], tool["function"].get("description", ""),
+                                                 tool["function"].get("parameters", {}).get("properties", {})) for tool
+         in
          tools]) +
             "\n</tools>"
     )
@@ -275,7 +276,7 @@ def construct_error_function_run_injection_prompt(invoke_results_error_message) 
 
 def construct_format_parameters_prompt(parameters) -> str:
     constructed_prompt = "\n".join(
-        f"<parameter>\n<name>{key}</name>\n<type>{value['type']}</type>\n<description>{value['description']}</description>\n</parameter>"
+        f"<parameter>\n<name>{key}</name>\n<type>{value['type']}</type>\n<description>{value.get('description', '')}</description>\n</parameter>"
         for key, value in parameters.items())
 
     return constructed_prompt
@@ -299,7 +300,11 @@ def construct_format_tool_for_claude_prompt(name, description, parameters) -> st
 
 def construct_tool_inputs_message(content, tool_inputs) -> str:
     def format_parameters(tool_arguments):
-        return '\n'.join([f'<{key}>{value}</{key}>' for key, value in json.loads(tool_arguments).items()])
+        log("TOOL ARGS: ",tool_arguments)
+        if tool_arguments != "null":
+            return '\n'.join([f'<{key}>{value}</{key}>' for key, value in json.loads(tool_arguments).items()])
+        else:
+            return ""
 
     single_call_messages = "\n\n".join([
         f"<invoke>\n<tool_name>{tool_input['tool_name']}</tool_name>\n<parameters>\n{format_parameters(tool_input['tool_arguments'])}\n</parameters>\n</invoke>"
