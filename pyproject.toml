@@ -22,5 +22,5 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/gptscript-ai/claudelib"
-Issues = "https://github.com/gptscript-ai/claudelib/issues"
+Homepage = "https://github.com/gptscript-ai/claude3_provider_common"
+Issues = "https://github.com/gptscript-ai/claude3_provider_common/issues"
