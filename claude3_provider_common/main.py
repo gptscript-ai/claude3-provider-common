@@ -32,8 +32,8 @@ def map_tools(tools: list[dict]) -> list[dict]:
     for tool in tools:
         anthropic_tool = {
             "name": tool["function"]["name"],
-            "description": tool["function"]["description"],
-            "input_schema": tool["function"]["parameters"],
+            "description": tool["function"].get("description", ""),
+            "input_schema": tool["function"].get("parameters", {"type": "object", "properties": {}}),
         }
         anthropic_tools.append(anthropic_tool)
     return anthropic_tools
