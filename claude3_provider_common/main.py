@@ -39,8 +39,6 @@ def map_req(req: dict) -> dict:
 
     messages = req["messages"]
 
-    tool_inputs_xml: list[str] = []
-    tool_outputs_xml: list[str] = []
     for message in messages:
         if 'role' in message.keys() and message["role"] == "system":
             system += message["content"] + "\n"
@@ -57,7 +55,7 @@ def map_req(req: dict) -> dict:
             })
 
         if 'role' in message.keys() and message["role"] == "tool":
-            content: str = '\n' + construct_tool_outputs_message([message], None)
+            content: str = construct_tool_outputs_message([message], None)
             mapped_messages.append({
                 "role": "user",
                 "content": content,
@@ -86,6 +84,13 @@ def map_req(req: dict) -> dict:
         if 'role' in message.keys() and message["role"] == "":
             message["role"] = "assistant"
 
+    def prepend_if_unique(lst, new_dict, key, value):
+        if not any(d.get(key) == value for d in lst):
+            lst.insert(0, new_dict)
+
+    prepend_if_unique(mapped_messages, {"role": "user", "content": "."}, "role", "user")
+    if mapped_messages[0]["role"] != "user":
+        mapped_messages.insert(0, {"role": "user", "content": "."})
     mapped_messages = merge_consecutive_dicts_with_same_value(mapped_messages, "role")
 
     mapped_req = {
@@ -196,11 +201,21 @@ async def completions(client: AsyncAnthropic | AsyncAnthropicBedrock, input: dic
     log("ORIGINAL REQUEST: ", input)
     req = map_req(input)
     log("MAPPED REQUEST: ", req)
-
+    system = """
+You are task oriented system.
+You receive input from a user, process the input from the given instructions, and then output the result.
+Your objective is to provide consistent and correct results.
+You do not need to explain the steps taken, only provide the result to the given instructions.
+You are referred to as a tool.
+You don't move to the next step until you have a result.
+"""
+    if req["system"] is not None:
+        system = system + req["system"]
     try:
         async with client.messages.stream(
                 max_tokens=req["max_tokens"],
-                system=req["system"],
+                system=system,
+                # system=req["system"],
                 messages=req["messages"],
                 model=req["model"],
                 temperature=req["temperature"],
@@ -300,7 +315,7 @@ def construct_format_tool_for_claude_prompt(name, description, parameters) -> st
 
 def construct_tool_inputs_message(content, tool_inputs) -> str:
     def format_parameters(tool_arguments):
-        log("TOOL ARGS: ",tool_arguments)
+        log("TOOL ARGS: ", tool_arguments)
         if tool_arguments != "null":
             return '\n'.join([f'<{key}>{value}</{key}>' for key, value in json.loads(tool_arguments).items()])
         else:
