@@ -8,6 +8,7 @@ from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
 
 debug = os.environ.get("GPTSCRIPT_DEBUG", "false") == "true"
+disable_provider_system_prompt = os.environ.get("DISABLE_PROVIDER_SYSTEM_PROMPT", "false") == "true"
 
 
 def log(*args):
@@ -40,30 +41,34 @@ def map_tools(tools: list[dict]) -> list[dict]:
 
 
 def map_messages(messages: dict) -> tuple[str, list[dict]]:
-    system: str = """
+    system: str = ""
+    if disable_provider_system_prompt:
+        system = """
 You are task oriented system.
 You receive input from a user, process the input from the given instructions, and then output the result.
 Your objective is to provide consistent and correct results.
 You do not need to explain the steps taken, only provide the result to the given instructions.
 You are referred to as a tool.
 You don't move to the next step until you have a result.
-    """
+"""
     mapped_messages: list[dict] = []
 
     for message in messages:
         if 'role' in message.keys() and (message["role"] in ["system"]):
-            # @TODO: figure out if there is a better way to do this - tool-beta claude acts differently than regular claude.
-            # If it sees the first user message as not being relevant to the conversation, it will complain.
-            # system += message["content"] + "\n"
-            mapped_messages.append({
-                "role": "user",
-                "content": [
-                    {
-                        "text": message["content"],
-                        "type": "text"
-                    },
-                ]
-            })
+            if disable_provider_system_prompt:
+                system += message["content"] + "\n"
+            else:
+                # @TODO: figure out if there is a better way to do this - tool-beta claude acts differently than regular claude.
+                # If it sees the first user message as not being relevant to the conversation, it will complain.
+                mapped_messages.append({
+                    "role": "user",
+                    "content": [
+                        {
+                            "text": message["content"],
+                            "type": "text"
+                        },
+                    ]
+                })
 
         if 'role' in message.keys() and message["role"] in "user":
             mapped_messages.append({
@@ -108,13 +113,14 @@ You don't move to the next step until you have a result.
                     "content": message["content"],
                 })
 
-    def prepend_if_unique(lst, new_dict, key, value):
-        if not any(d.get(key) == value for d in lst):
-            lst.insert(0, new_dict)
+    if not disable_provider_system_prompt:
+        def prepend_if_unique(lst, new_dict, key, value):
+            if not any(d.get(key) == value for d in lst):
+                lst.insert(0, new_dict)
 
-    prepend_if_unique(mapped_messages, {"role": "user", "content": "."}, "role", "user")
-    if mapped_messages[0]["role"] != "user":
-        mapped_messages.insert(0, {"role": "user", "content": "."})
+        prepend_if_unique(mapped_messages, {"role": "user", "content": "."}, "role", "user")
+        if mapped_messages[0]["role"] != "user":
+            mapped_messages.insert(0, {"role": "user", "content": "."})
 
     mapped_messages = merge_consecutive_dicts_with_same_value(mapped_messages, "role")
 
