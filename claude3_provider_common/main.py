@@ -19,11 +19,13 @@ async def list_models(client: AsyncAnthropic | AsyncAnthropicBedrock) -> JSONRes
         data = [{"id": "claude-3-opus-20240229", "name": "Anthropic Claude 3 Opus"},
                 {"id": "claude-3-sonnet-20240229", "name": "Anthropic Claude 3 Sonnet"},
                 {"id": "claude-3-haiku-20240307", "name": "Anthropic Claude 3 Haiku"},
-                {"id": "claude-3-5-sonnet-20240620", "name": "Claude 3.5 Sonnet"} ]
+                {"id": "claude-3-5-sonnet-20240620", "name": "Anthropic Claude 3.5 Sonnet"}, ]
     else:
         data = [{"id": "anthropic.claude-3-opus-20240229-v1:0", "name": "AWS Bedrock Anthropic Claude 3 Opus"},
                 {"id": "anthropic.claude-3-sonnet-20240229-v1:0", "name": "AWS Bedrock Anthropic Claude 3 Sonnet"},
-                {"id": "anthropic.claude-3-haiku-20240307-v1:0", "name": "AWS Bedrock Anthropic Claude 3 Haiku"}, ]
+                {"id": "anthropic.claude-3-haiku-20240307-v1:0", "name": "AWS Bedrock Anthropic Claude 3 Haiku"},
+                {"id": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                 "name": "AWS Bedrock Anthropic Claude 3.5 Sonnet"}, ]
     return JSONResponse(content={"data": data})
 
 
