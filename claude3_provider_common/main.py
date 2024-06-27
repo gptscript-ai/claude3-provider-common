@@ -294,7 +294,7 @@ def construct_error_function_run_injection_prompt(invoke_results_error_message) 
 
 def construct_format_parameters_prompt(parameters) -> str:
     constructed_prompt = "\n".join(
-        f"<parameter>\n<name>{key}</name>\n<type>{value['type']}</type>\n<description>{value.get('description', '')}</description>\n</parameter>"
+        f"<parameter>\n<name>{key}</name>\n<type>{value.get('type', 'string')}</type>\n<description>{value.get('description', '')}</description>\n</parameter>"
         for key, value in parameters.items())
 
     return constructed_prompt
