@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "claude3-provider-common"
-version = "0.0.4"
+name = "claude3_provider_common"
+version = "0.0.5"
 authors = [
     { name = "Taylor Price" },
 ]
@@ -16,12 +16,12 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "anthropic",
     "anthropic[bedrock]",
-    "xmltodict",
     "openai",
     "fastapi",
 ]
 
 [project.urls]
-Homepage = "https://github.com/gptscript-ai/claude3-provider-common"
-Issues = "https://github.com/gptscript-ai/claude3-provider-common/issues"
+Homepage = "https://github.com/gptscript-ai/claude3_provider_common"
+Issues = "https://github.com/gptscript-ai/claude3_provider_common/issues"

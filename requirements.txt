@@ -1,6 +1,4 @@
-hatch
-anthropic[bedrock]
-anthropic
-xmltodict
-openai
+anthropic[bedrock]==0.30.0
+anthropic==0.30.0
+openai==1.35.7
 fastapi
