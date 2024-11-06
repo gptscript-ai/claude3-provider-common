@@ -156,12 +156,6 @@ async def completions(client: AsyncAnthropic | AsyncAnthropicBedrock, input: dic
         tools = map_tools(tools)
         log("MAPPED TOOLS: ", tools)
 
-    if input["model"].startswith("anthropic."):
-        log('using bedrock client')
-        client = AsyncAnthropicBedrock()
-    else:
-        client = AsyncAnthropic()
-
     system, messages = map_messages(input["messages"])
 
     max_tokens = input.get("max_tokens", 1024)
