@@ -1,4 +1,4 @@
-anthropic[bedrock]==0.30.0
-anthropic==0.30.0
+anthropic[bedrock]==0.40.0
+anthropic==0.40.0
 openai==1.35.7
 fastapi
