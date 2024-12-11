@@ -163,7 +163,7 @@ async def completions(client: AsyncAnthropic | AsyncAnthropicBedrock, input: dic
         max_tokens = int(max_tokens)
 
     temperature = input.get("temperature", NOT_GIVEN)
-    if temperature is not None:
+    if temperature is not NOT_GIVEN:
         temperature = float(temperature)
 
     stream = input.get("stream", False)
