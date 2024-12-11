@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Optional
 
 from anthropic import AsyncAnthropic, AsyncAnthropicBedrock
 from anthropic._types import NOT_GIVEN
@@ -76,7 +77,12 @@ You don't move to the next step until you have a result.
     mapped_messages: list[dict] = []
 
     for message in messages:
-        if "role" in message.keys() and (message["role"] in ["system"]):
+
+        role = message.get("role")
+        if "content" in message.keys():
+            message["content"] = map_content(message.get("content"))
+
+        if role  == "system":
             if disable_provider_system_prompt:
                 system += message["content"] + "\n"
             else:
@@ -91,17 +97,25 @@ You don't move to the next step until you have a result.
                     }
                 )
 
-        if "role" in message.keys() and message["role"] in "user":
-            mapped_messages.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {"text": message["content"], "type": "text"},
-                    ],
-                }
-            )
+        elif role == "user":
+            if isinstance(message["content"], list):
+                mapped_messages.append(
+                    {
+                        "role": "user",
+                        "content": message["content"],
+                    }
+                )
+            else:
+                mapped_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": message["content"], "type": "text"},
+                        ],
+                    }
+                )
 
-        if "role" in message.keys() and message["role"] == "tool":
+        elif role == "tool":
             mapped_messages.append(
                 {
                     "role": "user",
@@ -115,7 +129,7 @@ You don't move to the next step until you have a result.
                 }
             )
 
-        if "role" in message.keys() and message["role"] == "assistant":
+        elif role == "assistant":
             if "tool_calls" in message.keys():
                 tool_calls = []
                 for tool_call in message["tool_calls"]:
@@ -291,3 +305,27 @@ def map_finish_reason(finish_reason: str) -> str:
     elif finish_reason == "tool_use":
         return "tool_calls"
     return finish_reason
+
+
+def map_content(content: Optional[dict]) -> Optional[dict]:
+    if content is not None and isinstance(content, list):
+        for i, item in enumerate(content):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "image_url":
+                image_url = item.get("image_url")
+                if image_url is not None and isinstance(image_url, dict):
+                    url = image_url.get("url")
+                    if url is not None and isinstance(url, str) and url.startswith("data:"):
+                        x = url.split(";")
+                        content[i] = {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": x[0].removeprefix("data:"),
+                                "data": x[1].removeprefix("base64,"),
+                            }
+                        }
+                        log("replaced openai-style image_url with anthropic-style image request")
+
+    return content
