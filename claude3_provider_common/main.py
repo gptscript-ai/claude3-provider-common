@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Optional
 
 from anthropic import AsyncAnthropic, AsyncAnthropicBedrock
 from anthropic._types import NOT_GIVEN
@@ -8,7 +9,9 @@ from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_chunk import Choice, ChoiceDelta
 
 debug = os.environ.get("GPTSCRIPT_DEBUG", "false") == "true"
-disable_provider_system_prompt = os.environ.get("DISABLE_PROVIDER_SYSTEM_PROMPT", "false") == "true"
+disable_provider_system_prompt = (
+    os.environ.get("DISABLE_PROVIDER_SYSTEM_PROMPT", "false") == "true"
+)
 
 
 def log(*args):
@@ -17,17 +20,32 @@ def log(*args):
 
 
 async def list_models(client: AsyncAnthropic | AsyncAnthropicBedrock) -> JSONResponse:
-    if type(client) == AsyncAnthropic:
-        data = [{"id": "claude-3-opus-20240229", "name": "Anthropic Claude 3 Opus"},
-                {"id": "claude-3-sonnet-20240229", "name": "Anthropic Claude 3 Sonnet"},
-                {"id": "claude-3-haiku-20240307", "name": "Anthropic Claude 3 Haiku"},
-                {"id": "claude-3-5-sonnet-20240620", "name": "Anthropic Claude 3.5 Sonnet"}, ]
+    if type(client) is AsyncAnthropic:
+        data = [
+            {"id": "claude-3-opus-20240229", "name": "Anthropic Claude 3 Opus"},
+            {"id": "claude-3-sonnet-20240229", "name": "Anthropic Claude 3 Sonnet"},
+            {"id": "claude-3-haiku-20240307", "name": "Anthropic Claude 3 Haiku"},
+            {"id": "claude-3-5-sonnet-20240620", "name": "Anthropic Claude 3.5 Sonnet"},
+        ]
     else:
-        data = [{"id": "anthropic.claude-3-opus-20240229-v1:0", "name": "AWS Bedrock Anthropic Claude 3 Opus"},
-                {"id": "anthropic.claude-3-sonnet-20240229-v1:0", "name": "AWS Bedrock Anthropic Claude 3 Sonnet"},
-                {"id": "anthropic.claude-3-haiku-20240307-v1:0", "name": "AWS Bedrock Anthropic Claude 3 Haiku"},
-                {"id": "anthropic.claude-3-5-sonnet-20240620-v1:0",
-                 "name": "AWS Bedrock Anthropic Claude 3.5 Sonnet"}, ]
+        data = [
+            {
+                "id": "anthropic.claude-3-opus-20240229-v1:0",
+                "name": "AWS Bedrock Anthropic Claude 3 Opus",
+            },
+            {
+                "id": "anthropic.claude-3-sonnet-20240229-v1:0",
+                "name": "AWS Bedrock Anthropic Claude 3 Sonnet",
+            },
+            {
+                "id": "anthropic.claude-3-haiku-20240307-v1:0",
+                "name": "AWS Bedrock Anthropic Claude 3 Haiku",
+            },
+            {
+                "id": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                "name": "AWS Bedrock Anthropic Claude 3.5 Sonnet",
+            },
+        ]
     return JSONResponse(content={"data": data})
 
 
@@ -37,7 +55,9 @@ def map_tools(tools: list[dict]) -> list[dict]:
         anthropic_tool = {
             "name": tool["function"]["name"],
             "description": tool["function"].get("description", ""),
-            "input_schema": tool["function"].get("parameters", {"type": "object", "properties": {}}),
+            "input_schema": tool["function"].get(
+                "parameters", {"type": "object", "properties": {}}
+            ),
         }
         anthropic_tools.append(anthropic_tool)
     return anthropic_tools
@@ -57,71 +77,92 @@ You don't move to the next step until you have a result.
     mapped_messages: list[dict] = []
 
     for message in messages:
-        if 'role' in message.keys() and (message["role"] in ["system"]):
+        role = message.get("role")
+        if "content" in message.keys():
+            message["content"] = map_content(message.get("content"))
+
+        if role == "system":
             if disable_provider_system_prompt:
                 system += message["content"] + "\n"
             else:
                 # @TODO: figure out if there is a better way to do this - tool use claude acts differently than regular claude.
                 # If it sees the first user message as not being relevant to the conversation, it will complain.
-                mapped_messages.append({
+                mapped_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": message["content"], "type": "text"},
+                        ],
+                    }
+                )
+
+        elif role == "user":
+            if isinstance(message["content"], list):
+                mapped_messages.append(
+                    {
+                        "role": "user",
+                        "content": message["content"],
+                    }
+                )
+            else:
+                mapped_messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {"text": message["content"], "type": "text"},
+                        ],
+                    }
+                )
+
+        elif role == "tool":
+            mapped_messages.append(
+                {
                     "role": "user",
                     "content": [
                         {
-                            "text": message["content"],
-                            "type": "text"
-                        },
-                    ]
-                })
+                            "type": "tool_result",
+                            "tool_use_id": message["tool_call_id"],
+                            "content": message["content"],
+                        }
+                    ],
+                }
+            )
 
-        if 'role' in message.keys() and message["role"] in "user":
-            mapped_messages.append({
-                "role": "user",
-                "content": [
-                    {
-                        "text": message["content"],
-                        "type": "text"
-                    },
-                ]
-            })
-
-        if 'role' in message.keys() and message["role"] == "tool":
-            mapped_messages.append({
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": message["tool_call_id"],
-                        "content": message["content"],
-                    }
-                ]
-            })
-
-        if 'role' in message.keys() and message["role"] == "assistant":
-            if 'tool_calls' in message.keys():
+        elif role == "assistant":
+            if "tool_calls" in message.keys():
                 tool_calls = []
                 for tool_call in message["tool_calls"]:
-                    tool_calls.append({
-                        "type": "tool_use",
-                        "id": tool_call["id"],
-                        "name": tool_call["function"]["name"],
-                        "input": json.loads(tool_call["function"]["arguments"]),
-                    })
-                mapped_messages.append({
-                    "role": "assistant",
-                    "content": tool_calls,
-                })
-            elif 'content' in message.keys() and message["content"] is not None:
-                mapped_messages.append({
-                    "role": "assistant",
-                    "content": message["content"],
-                })
+                    tool_calls.append(
+                        {
+                            "type": "tool_use",
+                            "id": tool_call["id"],
+                            "name": tool_call["function"]["name"],
+                            "input": json.loads(tool_call["function"]["arguments"]),
+                        }
+                    )
+                mapped_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": tool_calls,
+                    }
+                )
+            elif "content" in message.keys() and message["content"] is not None:
+                mapped_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": message["content"],
+                    }
+                )
 
     if not disable_provider_system_prompt:
+
         def prepend_if_unique(lst, new_dict, key, value):
             if not any(d.get(key) == value for d in lst):
                 lst.insert(0, new_dict)
 
-        prepend_if_unique(mapped_messages, {"role": "user", "content": "."}, "role", "user")
+        prepend_if_unique(
+            mapped_messages, {"role": "user", "content": "."}, "role", "user"
+        )
         if mapped_messages[0]["role"] != "user":
             mapped_messages.insert(0, {"role": "user", "content": "."})
 
@@ -137,11 +178,15 @@ def merge_consecutive_dicts_with_same_value(list_of_dicts, key) -> list[dict]:
         current_dict = list_of_dicts[index]
         value_to_match = current_dict.get(key)
         compared_index = index + 1
-        while compared_index < len(list_of_dicts) and list_of_dicts[compared_index].get(key) == value_to_match:
+        while (
+            compared_index < len(list_of_dicts)
+            and list_of_dicts[compared_index].get(key) == value_to_match
+        ):
             log("CURRENT DICT: ", current_dict)
             log("COMPARED DICT: ", list_of_dicts[compared_index])
-            list_of_dicts[compared_index]["content"] = current_dict["content"] + (list_of_dicts[compared_index][
-                "content"])
+            list_of_dicts[compared_index]["content"] = (
+                current_dict["content"] + (list_of_dicts[compared_index]["content"])
+            )
             current_dict.update(list_of_dicts[compared_index])
             compared_index += 1
         merged_list.append(current_dict)
@@ -166,8 +211,6 @@ async def completions(client: AsyncAnthropic | AsyncAnthropicBedrock, input: dic
     if temperature is not NOT_GIVEN:
         temperature = float(temperature)
 
-    stream = input.get("stream", False)
-
     top_k = input.get("top_k", NOT_GIVEN)
     if top_k is not NOT_GIVEN:
         top_k = int(top_k)
@@ -188,7 +231,9 @@ async def completions(client: AsyncAnthropic | AsyncAnthropicBedrock, input: dic
             top_p=top_p,
         )
     except Exception as e:
-        return JSONResponse(content={"error": str(e)}, status_code=e.__dict__.get("status_code", 500))
+        return JSONResponse(
+            content={"error": str(e)}, status_code=e.__dict__.get("status_code", 500)
+        )
 
     log("RESPONSE FROM CLAUDE")
     log(response.model_dump_json())
@@ -198,7 +243,10 @@ async def completions(client: AsyncAnthropic | AsyncAnthropicBedrock, input: dic
     log("MAPPED RESPONSE")
     log(mapped_response.model_dump_json())
 
-    return StreamingResponse("data: " + mapped_response.model_dump_json() + "\n\n", media_type="application/x-ndjson")
+    return StreamingResponse(
+        "data: " + mapped_response.model_dump_json() + "\n\n",
+        media_type="application/x-ndjson",
+    )
 
 
 def map_resp(response):
@@ -209,15 +257,17 @@ def map_resp(response):
         if response.stop_reason == "tool_use":
             if item.type == "tool_use":
                 index = len(parsed_tool_calls)
-                parsed_tool_calls.append({
-                    "index": index,
-                    "id": item.id,
-                    "type": "function",
-                    "function": {
-                        "name": item.name,
-                        "arguments": json.dumps(item.input),
+                parsed_tool_calls.append(
+                    {
+                        "index": index,
+                        "id": item.id,
+                        "type": "function",
+                        "function": {
+                            "name": item.name,
+                            "arguments": json.dumps(item.input),
+                        },
                     }
-                })
+                )
                 content = None
         else:
             if item.type == "text":
@@ -231,9 +281,7 @@ def map_resp(response):
         choices=[
             Choice(
                 delta=ChoiceDelta(
-                    content=content,
-                    tool_calls=parsed_tool_calls,
-                    role=role
+                    content=content, tool_calls=parsed_tool_calls, role=role
                 ),
                 finish_reason=finish_reason,
                 index=0,
@@ -247,12 +295,42 @@ def map_resp(response):
 
 
 def map_finish_reason(finish_reason: str) -> str:
-    if (finish_reason == "end_turn"):
+    if finish_reason == "end_turn":
         return "stop"
-    elif (finish_reason == "stop_sequence"):
+    elif finish_reason == "stop_sequence":
         return "stop"
     elif finish_reason == "max_tokens":
         return "length"
     elif finish_reason == "tool_use":
         return "tool_calls"
     return finish_reason
+
+
+def map_content(content: Optional[list | dict]) -> Optional[list | dict]:
+    if content is not None and isinstance(content, list):
+        for i, item in enumerate(content):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "image_url":
+                image_url = item.get("image_url")
+                if image_url is not None and isinstance(image_url, dict):
+                    url = image_url.get("url")
+                    if (
+                        url is not None
+                        and isinstance(url, str)
+                        and url.startswith("data:")
+                    ):
+                        x = url.split(";")
+                        content[i] = {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": x[0].removeprefix("data:"),
+                                "data": x[1].removeprefix("base64,"),
+                            },
+                        }
+                        log(
+                            "replaced openai-style image_url with anthropic-style image request"
+                        )
+
+    return content

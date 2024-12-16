@@ -1,1 +1,1 @@
-from .main import list_models, completions
+from .main import list_models, completions # noqa
